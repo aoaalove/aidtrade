@@ -1,0 +1,22 @@
+{
+    "binance": {
+        "url": "wss://stream.binance.com:9443/ws",
+        "subscriptions": [
+            {
+                "symbol": "btcusdt",
+                "streams": ["depth5@100ms", "trade"]
+            },
+            {
+                "symbol": "adausdt",
+                "streams": ["depth5@100ms", "trade"]
+            },
+            {
+                "symbol": "ethusdt",
+                "streams": ["depth5@100ms", "trade"]
+            }
+        ]
+    },
+    "print_depth": true,
+    "print_trade": true,
+	"depth_count": 1
+}

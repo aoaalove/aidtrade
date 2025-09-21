@@ -1,0 +1,183 @@
+#include <ixwebsocket/IXWebSocket.h>
+#include <nlohmann/json.hpp>
+#include <iostream>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <thread>
+#include <chrono>
+#include <unordered_map>
+#include <optional>
+
+using json = nlohmann::json;
+
+// Depth 데이터
+std::vector<std::vector<std::string>> prev_bids;
+std::vector<std::vector<std::string>> prev_asks;
+
+// Depth 출력 (맨 위에 고정)
+void print_depth(const std::vector<std::vector<std::string>>& bids,
+                 const std::vector<std::vector<std::string>>& asks) {
+    std::cout << "\033[H"; // 커서를 화면 맨 위로 이동 (기존 Trade 출력은 유지)
+    std::cout << "==== Depth 5 (Bid | Ask) ====\n";
+
+    // Ask (내림차순)
+    auto asks_sorted = asks;
+    std::sort(asks_sorted.begin(), asks_sorted.end(),
+              [](auto &a, auto &b) { return std::stod(a[0]) > std::stod(b[0]); });
+
+    for (size_t i = 0; i < std::min<size_t>(5, asks_sorted.size()); i++)
+        std::cout << "\t\t\t\t" << asks_sorted[i][0] << " | " << asks_sorted[i][1] << "\n";
+
+    // Bid (내림차순)
+    auto bids_sorted = bids;
+    std::sort(bids_sorted.begin(), bids_sorted.end(),
+              [](auto &a, auto &b) { return std::stod(a[0]) > std::stod(b[0]); });
+
+    for (size_t i = 0; i < std::min<size_t>(5, bids_sorted.size()); i++)
+        std::cout << bids_sorted[i][0] << " | " << bids_sorted[i][1] << "\n";
+
+    std::cout << "==============================\n\n";
+}
+
+// 간단한 command line 파싱
+class ParseArg {
+    std::string trim(const std::string& s) {
+        auto start = s.begin();
+        while (start != s.end() && std::isspace(*start)) ++start;
+        auto end = s.end();
+        do { --end; } while (std::distance(start, end) >= 0 && std::isspace(*end));
+        return std::string(start, end + 1);
+    }
+public:
+    ParseArg() = default;
+    ParseArg(int argc, char* argv[]) { parse(argc, argv); }
+
+    void parse(int argc, char* argv[]) {
+        if (argc <= 0) return;
+        std::string opt{};
+        std::string val{};
+        for (int ii = 0 ; ii < argc ; ++ii) {
+            std::string temp(trim(argv[ii]));
+            if (ii == 0) { m_app = std::move(temp); continue; }
+
+            if (temp[0] == '-') {
+                if (temp.size() < 2) continue;
+                if (temp[1] == '-') {
+                    size_t pos = temp.find('=');
+                    if (pos != std::string::npos)
+                        m_options.emplace(temp.substr(0, pos), temp.substr(pos+1));
+                    else
+                        opt = temp;
+                } else
+                    m_options.emplace(temp, "");
+            } else {
+                val = temp;
+                if (!opt.empty()) { m_options.emplace(opt, val); opt.clear(); }
+            }
+        }
+    }
+
+    bool isopt(const std::string& key) { return m_options.find(key) != m_options.end(); }
+    std::optional<std::string> getval(const std::string& key) {
+        auto it = m_options.find(key);
+        if (it == m_options.end()) return std::nullopt;
+        return it->second;
+    }
+
+private:
+    std::unordered_map<std::string, std::string> m_options;
+    std::string m_app;
+};
+
+int main(int argc, char* argv[]) {
+    ParseArg pa(argc, argv);
+    bool bprint = pa.isopt("-p");
+
+    // ------------------ Depth 스레드 ------------------
+    std::thread depthThread([&]() {
+        ix::WebSocket ws_depth;
+        ws_depth.setUrl("wss://stream.binance.com:9443/ws/adausdt@depth5@100ms");
+
+        ws_depth.setOnMessageCallback([&](const ix::WebSocketMessagePtr& msg) {
+            if (msg->type == ix::WebSocketMessageType::Message) {
+                try {
+                    auto data = json::parse(msg->str);
+                    auto bids_update = data.value("bids", std::vector<std::vector<std::string>>{});
+                    auto asks_update = data.value("asks", std::vector<std::vector<std::string>>{});
+                    bool changed = false;
+
+                    for (auto& bid : bids_update) {
+                        auto& price = bid[0];
+                        auto& qty   = bid[1];
+                        auto it = std::find_if(prev_bids.begin(), prev_bids.end(),
+                                               [&](auto& x){ return x[0] == price; });
+                        if (it != prev_bids.end()) {
+                            if (qty != "0") (*it)[1] = qty;
+                            else prev_bids.erase(it);
+                            changed = true;
+                        } else if (qty != "0") {
+                            prev_bids.push_back({price, qty});
+                            changed = true;
+                        }
+                    }
+
+                    for (auto& ask : asks_update) {
+                        auto& price = ask[0];
+                        auto& qty   = ask[1];
+                        auto it = std::find_if(prev_asks.begin(), prev_asks.end(),
+                                               [&](auto& x){ return x[0] == price; });
+                        if (it != prev_asks.end()) {
+                            if (qty != "0") (*it)[1] = qty;
+                            else prev_asks.erase(it);
+                            changed = true;
+                        } else if (qty != "0") {
+                            prev_asks.push_back({price, qty});
+                            changed = true;
+                        }
+                    }
+
+                    if (changed && bprint)
+                        print_depth(prev_bids, prev_asks);
+
+                } catch (const std::exception& e) {
+                    std::cerr << "[Depth] JSON parse error: " << e.what() << "\n";
+                }
+            }
+        });
+
+        ws_depth.start();
+        while (true) std::this_thread::sleep_for(std::chrono::seconds(1));
+    });
+
+    // ------------------ Trade 스레드 ------------------
+    std::thread tradeThread([&]() {
+        ix::WebSocket ws_trade;
+        ws_trade.setUrl("wss://stream.binance.com:9443/ws/adausdt@trade");
+
+        ws_trade.setOnMessageCallback([&](const ix::WebSocketMessagePtr& msg) {
+            if (msg->type == ix::WebSocketMessageType::Message) {
+                try {
+                    auto data = json::parse(msg->str);
+                    std::string price = data["p"];
+                    std::string qty   = data["q"];
+                    bool isSell = data["m"];
+                    std::cout << (isSell ? "SELL " : "BUY ")
+                              << qty << " @ " << price << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "[Trade] JSON parse error: " << e.what() << "\n";
+                }
+            }
+        });
+
+        ws_trade.start();
+        while (true) std::this_thread::sleep_for(std::chrono::seconds(1));
+    });
+
+    // ------------------ 메인 스레드 종료 대기 ------------------
+    depthThread.join();
+    tradeThread.join();
+
+    return 0;
+}
+
