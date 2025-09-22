@@ -1,6 +1,6 @@
 {
     "binance": {
-        "url": "wss://stream.binance.com:9443/ws",
+        "url": "wss://stream.binance.com:9443/stream",
         "subscriptions": [
             {
                 "symbol": "btcusdt",
@@ -18,5 +18,5 @@
     },
     "print_depth": true,
     "print_trade": true,
-	"depth_count": 1
+	"depth_count": 5
 }
