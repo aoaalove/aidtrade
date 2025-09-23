@@ -10,11 +10,12 @@
 #include <mutex>
 #include <format>
 #include <fstream>
-#include "parsearg.hpp"
 #include <boost/lockfree/spsc_queue.hpp>
 #include "marketfeed.hpp"
+#include "util.hpp"
 
 using json = nlohmann::json;
+using namespace aidtrade;
 
 struct DepthBook 
 {
@@ -72,7 +73,8 @@ boost::lockfree::spsc_queue<RawFeed, boost::lockfree::capacity<1024>> _queue;
 Config _config;
 std::unordered_map<std::string, DepthBook> depth_books;
 
-void print_depth(const std::string& timestamp, const std::string& symbol, const DepthBook& book) 
+void print_depth(const std::string& timestamp, const std::string& symbol, 
+		const DepthBook& book) 
 {
 	if (!book.bid1 and !book.ask1)
 		return;
@@ -85,7 +87,7 @@ std::cout << std::format("|{:10.2f}|", x) << '\n'; // width 10, right
 std::cout << std::format("|{:<10.2f}|", x) << '\n'; // width 10, left
 std::cout << std::format("|{:^10.2f}|", x) << '\n'; // width 10, center
 */
-	std::cout << timestamp << ":[DEPTH] " 
+	std::cout << timestamp.substr(8, 10) << ":[D] " 
 			<< symbol 
 			<< " "
 			<< std::setw(15) << std::right << book.bids[0][1]  
@@ -98,7 +100,8 @@ std::cout << std::format("|{:^10.2f}|", x) << '\n'; // width 10, center
 			<< std::endl;
 }
 
-void print_depth_all(const std::string& timestamp, const std::string& symbol, const DepthBook& book, size_t depth_count) 
+void print_depth_all(const std::string& timestamp, const std::string& symbol, 
+		const DepthBook& book, size_t depth_count) 
 {
 	if (depth_count == 1) 
 	{
@@ -107,8 +110,8 @@ void print_depth_all(const std::string& timestamp, const std::string& symbol, co
 	}
 		
 	std::cout << "-----------------------------------------------------\n";
-	std::cout << std::format("{}:[DEPTH] {} (Top {} Bids(Q|P)/Asks(P|Q))\n", 
-			timestamp, symbol, depth_count);
+	std::cout << std::format("{}:[D] {} (Top {} Bids(Q|P)/Asks(P|Q))\n", 
+			timestamp.substr(8, 10), symbol, depth_count);
 	std::cout << "-----------------------------------------------------\n";
 
 	for (size_t i = 0; i < std::min<size_t>(depth_count, book.asks.size()); i++) 
@@ -136,9 +139,7 @@ void on_ws_message(const ix::WebSocketMessagePtr& msg)
 
 		if (!js.contains("stream") || !js.contains("data"))
 			return;
-
-		RawFeed	feed(std::move(js));
-		_queue.push(std::move(feed));
+		_queue.push(RawFeed(std::move(js)));
 	} 
 	catch (const std::exception& e) 
 	{
@@ -165,6 +166,8 @@ void on_depth(const std::string& stream, const std::string& symbol, const RawFee
 		std::cout << "not match" << std::endl;
 		return; 
 	}
+	// make depth feed
+	// broadcast
 	auto& data = feed.data["data"];
 	auto& book = depth_books[symbol];
 	auto bids = data.value("bids", std::vector<std::vector<std::string>>{});
@@ -217,22 +220,17 @@ void on_depth(const std::string& stream, const std::string& symbol, const RawFee
 		print_depth_all(feed.timestamp, symbol, book, _config.depth_count);
 }
 
-std::string to_lower(const std::string& input) {
-    std::string result = input;
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-    return result;
-}
-
 void on_trade(const std::string& stream, const std::string& symbol, const RawFeed& feed)
 {
+	// make price feed
 	auto& data = feed.data["data"];
 	std::string symbol2 = data.value("s", "");
 	symbol2 = to_lower(symbol2);
 	std::string event  = data.value("e", "");
 	if (symbol != symbol2 or stream != event) 
 	{
-		std::cout << "not matched:" << symbol <<"," << symbol2 << "," << stream <<","<< event<< std::endl;
+		std::cout << "not matched:" << symbol <<"," << symbol2 << "," << stream 
+			<<","<< event<< std::endl;
 		return;
 	}
 
@@ -242,8 +240,9 @@ void on_trade(const std::string& stream, const std::string& symbol, const RawFee
 
 	if (_config.print_trade)
 	{
-		std::cout << feed.timestamp << ":[TRADE] " << symbol
-			<< std::format(" {:>4} {} {:>15}\n", (isBuyerMaker ? "\033[31mSELL\033[0m" : "\033[32mBUY\033[0m"), std::format("\033[1;34m{}\033[0m", price), qty);
+		std::cout << feed.timestamp.substr(8, 10) << ":[T] " << symbol 
+			<< std::format(" {:>4} {} {:>15}\n", (isBuyerMaker ? "\033[31mSELL\033[0m" : 
+			"\033[32mBUY \033[0m"), std::format("\033[1;34m{}\033[0m", price), qty);
 	}
 }
 
