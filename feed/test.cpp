@@ -1,6 +1,8 @@
 #include <iostream>
 #include <vector>
 #include <unordered_map>
+#include <chrono>
+#include <format>
 
 class ParseArg
 {
@@ -20,8 +22,7 @@ class ParseArg
 		std::string val{};
 		for (int ii = 0 ; ii < argc ; ++ii)
 		{
-			std::string temp(trim(argv[ii]));
-			if (ii == 0)
+			std::string temp(trim(argv[ii])); if (ii == 0)
 			{
 				m_app = std::move(temp);
 				continue;
@@ -72,6 +73,14 @@ class ParseArg
 
 int main(int argc, char* argv[])
 {
+	using namespace std::chrono;
 	ParseArg pa(argc, argv);
 	pa.print();
+	auto now = system_clock::now();
+	std::cout << std::format("{:%Y-%m-%d %H:%M:%S}\n", floor<seconds>(now));
+	std::cout << std::format("{:%F %T}\n", now);
+	std::time_t	t = std::chrono::system_clock::to_time_t(now);
+	auto now2 = floor<nanoseconds>(system_clock::from_time_t(t));
+	std::cout << std::format("{:%Y-%m-%d %H:%M:%S}\n", now2);
+	std::cout << std::format("{:%F %T}\n", now2);
 }
